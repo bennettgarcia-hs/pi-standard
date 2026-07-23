@@ -1,0 +1,34 @@
+{
+  "name": "@yourorg/pi-standard",
+  "version": "0.1.0",
+  "description": "Company-wide standard Pi setup: shared extensions, skills, prompts, and themes.",
+  "keywords": [
+    "pi-package"
+  ],
+  "license": "UNLICENSED",
+  "private": true,
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ],
+    "skills": [
+      "./skills"
+    ],
+    "prompts": [
+      "./prompts"
+    ],
+    "themes": [
+      "./themes"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "scripts": {
+    "validate": "node scripts/validate.mjs"
+  }
+}

@@ -1,0 +1,20 @@
+name: validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Validate package structure, skills, and themes
+        run: node scripts/validate.mjs
+      # Optional: type-check extensions once real deps are added.
+      # - run: npm ci
+      # - run: npx tsc --noEmit

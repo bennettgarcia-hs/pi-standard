@@ -1,0 +1,7 @@
+node_modules/
+*.log
+.DS_Store
+
+# Pi-installed package caches (should never be committed here)
+.pi/npm/
+.pi/git/
