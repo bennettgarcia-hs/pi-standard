@@ -1,0 +1,37 @@
+name: publish
+
+# Release model: push a version tag (vX.Y.Z) and this workflow publishes the
+# package to GitHub Packages. Publishing needs the write:packages scope, which
+# the workflow's built-in GITHUB_TOKEN has automatically — no personal token,
+# no publishing from a laptop.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # allow the built-in token to publish to GitHub Packages
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://npm.pkg.github.com"
+      - name: Validate package before publishing
+        run: node scripts/validate.mjs
+      - name: Guard — package.json version must match the pushed tag
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::package.json version ($PKG_VERSION) does not match tag ($TAG_VERSION)"
+            exit 1
+          fi
+      - name: Publish to GitHub Packages
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,12 +1,25 @@
 {
-  "name": "@yourorg/pi-standard",
-  "version": "0.1.0",
+  "name": "@bennettgarcia-hs/pi-standard",
+  "version": "0.4.0",
   "description": "Company-wide standard Pi setup: shared extensions, skills, prompts, and themes.",
   "keywords": [
     "pi-package"
   ],
   "license": "UNLICENSED",
   "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bennettgarcia-hs/pi-standard.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "files": [
+    "extensions",
+    "skills",
+    "prompts",
+    "themes"
+  ],
   "pi": {
     "extensions": [
       "./extensions"
