@@ -88,7 +88,7 @@ export default function orgBanner(pi: any) {
   pi.on("session_start", async (event: any, ctx: any) => {
     // Only greet on a fresh launch or a new chat — not on reload/resume/fork.
     if (event?.reason !== "startup" && event?.reason !== "new") return;
-    if (!ctx?.ui?.hasUI) return; // no-op in print/JSON modes
+    if (!ctx?.hasUI) return; // no-op in print/JSON modes
 
     const lines = BANNER.split("\n");
     const colored = await colorize(detectMode(), lines.length);
