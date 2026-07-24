@@ -1,6 +1,6 @@
 {
-  "$comment": "Copy this file to `.pi/settings.json` in a project repo and commit it. Teammates run `pi`, approve the trust prompt once, and Pi auto-installs the standard package on startup. Pin to an exact published version for reproducibility (published versions are immutable). Registry auth via GitHub Packages is required once per machine — see the README.",
+  "$comment": "Copy this file to `.pi/settings.json` in a project repo and commit it. Teammates run `pi`, approve the trust prompt once, and Pi auto-installs the standard package on startup. This tracks the `main` branch: no auth token needed (public repo, anonymous clone) and no detached-HEAD notice (Pi stays on the branch). Tradeoff: you get whatever is on main at install/update time, not a frozen version — merges to main are gated by PR review.",
   "packages": [
-    "npm:@bennettgarcia-hs/pi-standard@0.4.0"
+    "git:github.com/bennettgarcia-hs/pi-standard@main"
   ]
 }

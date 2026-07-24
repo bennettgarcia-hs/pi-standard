@@ -16,57 +16,50 @@ scripts/validate.mjs     # pre-merge structure validator (runs in CI)
 
 ## How teams consume it
 
-This package is published to **GitHub Packages** (npm registry) and installed
-via an `npm:` source. Unlike a `git:` source, npm installs are tarball
-downloads — no git clone and no detached-HEAD checkout.
+This repo is a Pi package consumed directly from git, tracking the `main`
+branch. This needs **no auth token** (public repo, anonymous clone) and shows
+**no detached-HEAD notice** (pinning a branch keeps the clone on that branch,
+unlike pinning a tag).
 
 In a project repo, create `.pi/settings.json` (copy from
 [`settings.baseline.json`](./settings.baseline.json)) and commit it:
 
 ```json
 {
-  "packages": ["npm:@bennettgarcia-hs/pi-standard@0.4.0"]
+  "packages": ["git:github.com/bennettgarcia-hs/pi-standard@main"]
 }
 ```
 
 A teammate then runs `pi` in that project, approves the trust prompt once, and
-Pi **auto-installs the standard package on startup**. No separate install step.
+Pi **auto-installs the standard package on startup**. No separate install step,
+no credentials.
 
-- **Pin to a version** (`@0.4.0`). Published versions are immutable, so a pin is
-  reproducible. Merging to `main` never changes anyone's setup until a new
-  version is published *and* they bump the pin — you control the blast radius.
+- **Tracks `main`.** Consumers get whatever is on `main` at install / `pi update`
+  time — this is a *moving* pin, not a frozen version, so it is not
+  bit-for-bit reproducible. The safety net is branch protection: every change
+  to `main` goes through a reviewed PR (see below).
 - To try changes without installing: `pi -e ./` from a checkout of this repo.
 
-### Registry auth (one-time per machine / jail)
-
-GitHub Packages requires auth to install, even for public packages. Point the
-`@bennettgarcia-hs` scope at the GitHub registry with a token. In an
-environment that already has `gh` (e.g. the jail):
-
-```bash
-# Scope only @bennettgarcia-hs to GitHub Packages; everything else uses npmjs.
-printf '@bennettgarcia-hs:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=%s\n' \
-  "$(gh auth token)" >> ~/.npmrc
-```
-
-The token needs the `read:packages` scope (gh's default token has it). This is
-the only credential setup required; the package itself downloads over the
-registry, not git.
+> **Why not tags or an npm registry?** Tags are immutable (reproducible) but
+> pinning one puts Pi's clone in detached-HEAD, which prints a noisy git notice
+> on every install. GitHub Packages (npm) avoids that but *requires an auth
+> token even for public packages*, which is fragile to provision in sandboxed
+> environments (e.g. the jail). Tracking `main` avoids both problems at the
+> cost of reproducibility. If you later need frozen versions, reintroduce tags
+> and silence the notice with `git config advice.detachedHead false`.
 
 ## Releasing
 
-Releases are published by GitHub Actions on a version tag — never from a
-laptop, and the built-in `GITHUB_TOKEN` carries the `write:packages` scope so
-no personal token is needed.
+There is no publish step — consumers track `main` directly, so a change reaches
+everyone on their next `pi update` (or next Pi start, for a fresh install).
 
-1. Merge changes to `main` via PR (protected branch).
-2. Bump `version` in `package.json` to `X.Y.Z` and merge that too.
-3. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
-4. The `publish` workflow validates, checks the tag matches `package.json`
-   version, and runs `npm publish`. Teams bump their pinned spec when ready.
+1. Open a PR (branch protection requires review before merge).
+2. Merge to `main`. That *is* the release.
+3. Announce notable changes so teams know to `pi update`.
 
-Use semver: breaking extension/skill changes → major bump, since Pi's own
-extension API is pre-1.0 and can shift under you.
+Because there is no version pin, treat every merge to `main` as shipped to all
+consumers. Keep changes small and reviewed; Pi's extension API is pre-1.0 and
+can shift under you.
 
 ## Caveats (Pi platform limits)
 
@@ -77,5 +70,6 @@ extension API is pre-1.0 and can shift under you.
   If you need hard enforcement, add it externally (onboarding script that
   writes the global settings, or a CI check in consumer repos that fails if
   `.pi/settings.json` drops this package).
-- **No lockfile.** Pin every spec to an exact version.
+- **No reproducibility.** Consumers track `main`, so there is no frozen
+  version — a merge ships to everyone. Reviewed PRs are the only safety net.
 - Pi's extension API is pre-1.0 with no formal deprecation policy; expect churn.
