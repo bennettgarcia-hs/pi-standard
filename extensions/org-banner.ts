@@ -1,22 +1,25 @@
 /**
  * Org banner extension.
  *
- * Renders the company ASCII-art banner at the very top of the terminal, above
- * pi's startup output (skills, extensions, warnings). The banner is colorized
- * with a vertical gradient built from the USER'S OWN terminal palette — never a
- * hardcoded brand color.
+ * Renders the company ASCII-art banner ("Hyper-π") at the very top of the
+ * terminal, above pi's startup output (skills, extensions, warnings). Each
+ * LETTER of the logo is painted a single color drawn from the USER'S OWN
+ * terminal palette — never a hardcoded brand color, and no top-to-bottom
+ * gradient (which muddied through gray between distant hues).
  *
  * How the colors are sourced (in order of preference):
- *   1. truecolor  — query the terminal for the real RGB of a few palette slots
- *                   via OSC 4 ("\e]4;N;?"), then interpolate a smooth 24-bit
- *                   gradient between those actual values. This is the user's
- *                   exact palette, rendered as a gradient.
+ *   1. truecolor  — query the terminal for the real RGB of a set of palette
+ *                   slots via OSC 4 ("\e]4;N;?"), and emit 24-bit escapes with
+ *                   those exact values. This is the user's literal palette.
  *   2. ansi16     — if the OSC query fails/times out (some terminals or
  *                   multiplexers don't answer), emit standard SGR foreground
- *                   codes (\e[35m etc.). These ALSO resolve to the user's
- *                   palette — \e[35m is whatever the user themed "magenta" to —
- *                   just without smooth interpolation.
+ *                   codes (\e[35m etc.), which ALSO resolve to the user's
+ *                   palette, just limited to the 16 named slots.
  *   3. none       — NO_COLOR set, or a dumb/no-TTY terminal → plain art.
+ *
+ * Why Node and not awk: macOS's /usr/bin/awk is byte-oriented and corrupts the
+ * multibyte box-drawing glyphs (█ ░) when indexing columns, so per-letter
+ * coloring can't be done portably in awk. Node handles Unicode natively.
  *
  * Placement note: pi's startup log and scrollback widgets all render after the
  * extension factory runs, so the only hook that lands *above* that output is
@@ -28,18 +31,22 @@
 import { spawnSync } from "node:child_process";
 import { openSync, readSync, writeSync, closeSync } from "node:fs";
 
-// --- Gradient stops ----------------------------------------------------------
-// Palette slots (ANSI color indices) sampled top→bottom to build the gradient.
-// We read the REAL RGB of these slots from the terminal, so the banner uses the
-// user's actual theme. 5/4/6 = magenta → blue → cyan, a cool sweep that echoes
-// the logo. The same indices double as the 16-color SGR ramp (35/34/36) so the
-// ansi16 fallback pulls from the same palette slots.
-const STOP_INDICES = [5, 4, 6]; // magenta, blue, cyan
-const SGR_FOR_INDEX: Record<number, number> = { 4: 34, 5: 35, 6: 36 };
+// --- Per-letter palette assignment -------------------------------------------
+// The logo has 7 glyphs: H y p e r - π. Each is assigned one palette slot
+// (ANSI color index). We read the slot's REAL RGB from the terminal, so the
+// banner uses the user's actual theme. Indices chosen for a lively, legible
+// spread across a typical 16-color scheme; edit to re-theme org-wide.
+//   9=bright red 11=bright yellow 10=bright green 14=bright cyan
+//   12=bright blue 13=bright magenta
+const LETTER_SLOTS = [13, 12, 14, 10, 11, 9, 13]; // H y p e r - π
+// SGR foreground code for each palette index (bright set = 90+(idx-8)).
+const sgrForIndex = (idx: number): number => (idx >= 8 ? 90 + (idx - 8) : 30 + idx);
 
 // --- Banner art --------------------------------------------------------------
-// Self-contained copy of the org banner. To update: replace these lines
-// (keep them raw — coloring is applied at render time by the awk pass below).
+// Self-contained copy of the org banner. To update: replace these lines. The
+// glyph boundaries are detected at runtime from the solid (█) blocks, so new
+// art re-segments automatically as long as letters are separated by >=2
+// shadow/space columns.
 const BANNER = String.raw`
 ██  ██
 ██░ ██░ ██  ██  █████    ████   ██ ██         ███████
@@ -50,79 +57,77 @@ const BANNER = String.raw`
          ░░░░    ░░
 `.replace(/^\n/, "").replace(/\n$/, "");
 
-// --- awk palette programs ----------------------------------------------------
-// Truecolor: interpolate a 24-bit gradient across an arbitrary list of RGB
-// `stops` (space-separated "r,g,b" triples). Each row maps to a point along the
-// multi-segment gradient, so any number of stops works.
-const AWK_TRUECOLOR = String.raw`
-BEGIN { esc = sprintf("%c", 27); m = split(stops, S, " ") }
-{
-  # t in [0,1] down the block; guard single-line banners.
-  t = (n > 1) ? (NR - 1) / (n - 1) : 0
-  seg = t * (m - 1)          # position along the stop list
-  i = int(seg)               # lower stop index (0-based)
-  if (i > m - 2) i = m - 2
-  if (i < 0) i = 0
-  f = seg - i                # fraction into this segment
-  split(S[i + 1], lo, ",")
-  split(S[i + 2], hi, ",")
-  r = int(lo[1] + (hi[1] - lo[1]) * f + 0.5)
-  g = int(lo[2] + (hi[2] - lo[2]) * f + 0.5)
-  b = int(lo[3] + (hi[3] - lo[3]) * f + 0.5)
-  printf "%s[38;2;%d;%d;%dm%s%s[0m\n", esc, r, g, b, $0, esc
-}
-`;
-
-// 16-color: pick a standard SGR foreground code per row from the `codes` ramp
-// (space-separated). Rows map evenly across the ramp so the gradient direction
-// is preserved regardless of banner height. These codes resolve to the user's
-// own palette.
-const AWK_ANSI16 = String.raw`
-BEGIN { esc = sprintf("%c", 27); m = split(codes, ramp, " ") }
-{
-  t = (n > 1) ? (NR - 1) / (n - 1) : 0
-  idx = int(t * (m - 1) + 0.5) + 1
-  printf "%s[%dm%s%s[0m\n", esc, ramp[idx], $0, esc
-}
-`;
-
 type RGB = [number, number, number];
+
+/**
+ * Segment the banner into glyph columns from the solid (█) blocks. Returns, for
+ * each column index, the glyph number it belongs to. Runs of solid cells are
+ * treated as one glyph; a gap of >=2 non-solid columns separates glyphs. The
+ * cut between two glyphs is the midpoint of the gap, so shadow/space cells are
+ * attributed to whichever letter they sit closest to.
+ */
+function columnToGlyph(): { map: number[]; glyphCount: number; width: number } {
+  const rows = BANNER.split("\n").map((l) => [...l]);
+  const width = Math.max(...rows.map((r) => r.length));
+  const solid = new Array(width).fill(false);
+  for (const r of rows) {
+    for (let i = 0; i < r.length; i++) if (r[i] === "█") solid[i] = true;
+  }
+  const runs: Array<[number, number]> = [];
+  let inRun = false, start = 0, last = 0;
+  for (let i = 0; i < width; i++) {
+    if (solid[i]) {
+      if (!inRun) { start = i; inRun = true; }
+      last = i;
+    } else if (inRun) {
+      let gap = 0, j = i;
+      while (j < width && !solid[j]) { gap++; j++; }
+      if (gap >= 2 || j >= width) { runs.push([start, last]); inRun = false; }
+    }
+  }
+  if (inRun) runs.push([start, last]);
+
+  const cuts: number[] = [];
+  for (let k = 0; k < runs.length - 1; k++) {
+    cuts.push(Math.floor((runs[k][1] + runs[k + 1][0]) / 2));
+  }
+  const map = new Array(width);
+  for (let c = 0; c < width; c++) {
+    let g = 0;
+    for (const cut of cuts) if (c > cut) g++;
+    map[c] = g;
+  }
+  return { map, glyphCount: runs.length, width };
+}
 
 /**
  * Query the terminal for the real RGB of the given palette indices using OSC 4.
  * Returns a map of index → [r,g,b] (0-255), or null if the terminal doesn't
  * answer (no TTY, multiplexer swallows it, timeout, etc.).
  *
- * Uses an independent /dev/tty fd so we don't fight pi's stdin handling, and
- * `stty` (acting on that fd) to enter a non-canonical, no-echo read mode so the
- * escape-sequence reply isn't line-buffered or echoed. Everything is wrapped in
- * try/finally to restore the terminal even on error.
+ * Uses an independent /dev/tty fd and `stty` (acting on that fd) to enter a
+ * non-canonical, no-echo read mode so the escape-sequence reply isn't
+ * line-buffered or echoed. Everything is wrapped in try/finally to restore the
+ * terminal even on error.
  */
 function queryPalette(indices: number[]): Map<number, RGB> | null {
   let fd: number | null = null;
   let saved: string | null = null;
   try {
     fd = openSync("/dev/tty", "r+");
-
-    // Save current terminal settings, then switch to raw-ish read with a short
-    // inter-byte timeout (time is in tenths of a second). stty acts on its
-    // stdin, which we point at the tty fd — portable across macOS and Linux.
     const g = spawnSync("stty", ["-g"], { stdio: [fd, "pipe", "ignore"], encoding: "utf8" });
     if (g.status === 0 && g.stdout) saved = g.stdout.trim();
     spawnSync("stty", ["-echo", "-icanon", "min", "0", "time", "2"], {
       stdio: [fd, "ignore", "ignore"],
     });
 
-    // Fire all queries at once, then read until we've parsed them all or the
-    // overall deadline passes.
     const query = indices.map((i) => `\x1b]4;${i};?\x07`).join("");
     writeSync(fd, query);
 
     const buf = Buffer.alloc(4096);
     let acc = "";
-    const deadline = Date.now() + 400; // ms; generous but bounded
+    const deadline = Date.now() + 400; // ms; bounded
     const result = new Map<number, RGB>();
-    // OSC 4 reply: ESC ] 4 ; N ; rgb:RRRR/GGGG/BBBB (BEL or ST terminated)
     const re = /\]4;(\d+);rgb:([0-9a-fA-F]+)\/([0-9a-fA-F]+)\/([0-9a-fA-F]+)/g;
 
     while (Date.now() < deadline && result.size < indices.length) {
@@ -137,8 +142,7 @@ function queryPalette(indices: number[]): Map<number, RGB> | null {
         let m: RegExpExecArray | null;
         re.lastIndex = 0;
         while ((m = re.exec(acc)) !== null) {
-          const idx = Number(m[1]);
-          result.set(idx, [scale(m[2]), scale(m[3]), scale(m[4])]);
+          result.set(Number(m[1]), [scale(m[2]), scale(m[3]), scale(m[4])]);
         }
       }
     }
@@ -179,39 +183,60 @@ function supportsTruecolor(): boolean {
   return ct === "truecolor" || ct === "24bit";
 }
 
-/** Run the banner through an awk program synchronously; plain art on failure. */
-function runAwk(program: string, extraArgs: string[]): string {
-  const res = spawnSync("awk", ["-v", `n=${BANNER.split("\n").length}`, ...extraArgs, program], {
-    input: BANNER,
-    encoding: "utf8",
-  });
-  if (res.status === 0 && res.stdout) return res.stdout.replace(/\n$/, "");
-  return BANNER;
-}
+const ESC = "\x1b";
+const RESET = `${ESC}[0m`;
 
-/** Build the colored banner, sourcing colors from the user's real palette. */
+/**
+ * Build the colored banner. Each glyph is one solid palette color; a color
+ * change is only emitted at glyph boundaries (not every cell) to keep the
+ * escape overhead low and the look clean.
+ */
 function colorize(): string {
   if (noColor()) return BANNER;
 
-  // Preferred: real palette RGB → smooth truecolor gradient.
-  if (supportsTruecolor()) {
-    const palette = queryPalette(STOP_INDICES);
-    if (palette) {
-      const stops = STOP_INDICES.filter((i) => palette.has(i)).map((i) => palette.get(i)!.join(","));
-      if (stops.length >= 2) return runAwk(AWK_TRUECOLOR, ["-v", `stops=${stops.join(" ")}`]);
-    }
-    // Truecolor terminal but the query gave us nothing usable: fall through to
-    // the 16-color path, which still resolves to the user's palette.
-  }
+  const { map, glyphCount } = columnToGlyph();
 
-  // Fallback: SGR codes → the user's palette, no interpolation.
-  const codes = STOP_INDICES.map((i) => SGR_FOR_INDEX[i]).join(" ");
-  return runAwk(AWK_ANSI16, ["-v", `codes=${codes}`]);
+  // Resolve one SGR-code-or-RGB per glyph from the user's palette.
+  const wanted = LETTER_SLOTS.slice(0, glyphCount);
+  let rgbBySlot: Map<number, RGB> | null = null;
+  if (supportsTruecolor()) rgbBySlot = queryPalette([...new Set(wanted)]);
+
+  const open = (glyph: number): string => {
+    const slot = LETTER_SLOTS[glyph % LETTER_SLOTS.length];
+    const rgb = rgbBySlot?.get(slot);
+    if (rgb) return `${ESC}[38;2;${rgb[0]};${rgb[1]};${rgb[2]}m`;
+    return `${ESC}[${sgrForIndex(slot)}m`; // palette fallback (still user's colors)
+  };
+
+  return BANNER.split("\n")
+    .map((line) => {
+      const cells = [...line];
+      let out = "";
+      let cur = -1;
+      for (let c = 0; c < cells.length; c++) {
+        const glyph = map[c] ?? 0;
+        if (glyph !== cur) {
+          out += open(glyph);
+          cur = glyph;
+        }
+        out += cells[c];
+      }
+      return out + RESET;
+    })
+    .join("\n");
 }
+
+// Process-level guard: pi may load this package more than once (e.g. a global
+// install plus a `pi -e <path>` dev copy). Each loaded copy runs the factory,
+// which would print the banner once per copy. This flag ensures a single print
+// per process regardless of how many copies are loaded.
+const GUARD = "__ORG_BANNER_PRINTED__";
 
 export default function orgBanner(_pi: any) {
   // Only draw for an interactive terminal; skip pipes, print/JSON modes.
   if (!process.stdout.isTTY) return;
+  if ((globalThis as any)[GUARD]) return;
+  (globalThis as any)[GUARD] = true;
 
   // Blank line above and below so the banner isn't flush against the prompt
   // or pi's first startup line.
