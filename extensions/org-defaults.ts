@@ -12,20 +12,24 @@
  */
 export default function orgDefaults(pi: any) {
   // Example: register an org-standard slash command.
-  pi.registerCommand({
-    name: "org-info",
+  // Signature is registerCommand(name, options) — name is a separate string
+  // arg, and the callback is `handler(args, ctx)`.
+  pi.registerCommand("org-info", {
     description: "Show which org standard package version is loaded",
-    run: async (ctx: any) => {
-      await ctx.ui.notify(
+    handler: async (_args: any, ctx: any) => {
+      ctx.ui.notify(
         "Loaded @yourorg/pi-standard. Propose changes via PR to yourorg/pi-standard.",
+        "info",
       );
     },
   });
 
   // Example: block a destructive command at the tool-call boundary.
   // The `tool_call` event is blockable — return { block: true } to veto.
+  // Bash args live on event.input.command; guard on event.toolName.
   pi.on("tool_call", (event: any) => {
-    const cmd = event?.args?.command ?? "";
+    if (event?.toolName !== "bash") return;
+    const cmd = event?.input?.command ?? "";
     if (/\brm\s+-rf\s+\/(?:\s|$)/.test(cmd)) {
       return { block: true, reason: "Blocked by org standard: refusing `rm -rf /`." };
     }
