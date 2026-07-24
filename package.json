@@ -11,9 +11,6 @@
     "type": "git",
     "url": "git+https://github.com/bennettgarcia-hs/pi-standard.git"
   },
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
-  },
   "files": [
     "extensions",
     "skills",
